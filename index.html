@@ -714,37 +714,62 @@ btn.onclick=async function(){
 })();
 </script>
 <script>
-/* ===== 微博官號公告區塊（貼在 </body> 的前一行）=====
-   讀取同資料夾的 weibo.json（由排程的 weibo_check.py 產生），在日曆下方顯示「微博公告」清單。
-   - 微博是大陸服公告，台服日期可能不同；這個區塊只供參考，不會改動日曆上的卡池資料。
-   - 讀不到 weibo.json 或微博擋掉自動讀取時，會顯示說明，其餘功能不受影響。
-   - 不依賴頁面其他程式的內部變數，只用頁面上的按鈕與 DOM，所以可以安全地加在任何版本的 index.html。 */
+/* ===== 微博官號公告區塊 v2（含縮圖，手機優先）— 貼在 body 結尾標籤的前一行 =====
+   取代舊版的微博區塊：請先把舊的那一整段 script 區塊（開頭註解寫著「微博官號公告區塊」）刪掉，再貼這一整段。
+   即使忘了刪舊的，這段也會先移除舊區塊，不會出現兩個。
+   - 讀取同資料夾的 weibo.json（由排程的 weibo_check.py 產生）。
+   - 縮圖只在你的瀏覽器向微博圖床讀取，不會下載或存到倉庫；點縮圖可放大，手機可左右滑動換張。
+   - 圖片載入失敗（圖床擋外連、網路慢）只會顯示灰色方塊，不影響文字；可用「🖼 圖片」開關關閉以節省流量。
+   - 微博是大陸服公告，台服日期可能不同；這個區塊只供參考，不會改動日曆上的卡池資料。 */
 (function(){
 "use strict";
-var DATA="weibo.json",REFRESH=30*60*1000,STEP=8,FEED=null,ERR="",TAG="全部",N=STEP;
+var old=document.getElementById("wbCard");if(old&&old.parentNode)old.parentNode.removeChild(old);
+var DATA="weibo.json",REFRESH=30*60*1000,STEP=8,FEED=null,ERR="",TAG="全部",N=STEP,IMG_KEY="lads_wb_img_v1";
 var TAGS=["全部","卡池","PV","更新維護","活動"];
 function mk(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
 function isAdmin(){var a=document.getElementById("adminTools");return !!a&&!a.hidden}
+function imgOn(){try{return localStorage.getItem(IMG_KEY)!=="0"}catch(e){return true}}
+function setImg(v){try{localStorage.setItem(IMG_KEY,v?"1":"0")}catch(e){}}
 
 /* ---------- 樣式 ---------- */
-var st=document.createElement("style");
+var st=document.createElement("style");st.id="wbStyle2";
 st.textContent=
 ".wb-card{margin:0 18px 18px;background:var(--card,#fff);border:1px solid var(--line,#ece6f6);border-radius:14px;padding:12px;color:var(--ink,#4a4458)}"
 +".wb-head{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}.wb-head h3{margin:0;font-size:15px;color:var(--accent,#7b5ea7)}"
 +".wb-stat{font-size:12px;color:var(--sub,#7a7391)}.wb-warn{font-size:12px;background:#fff3cd;color:#8a6d00;border:1px solid #ffe69c;border-radius:8px;padding:4px 8px;margin-top:8px}"
 +".wb-note{font-size:12px;color:var(--sub,#7a7391);margin-top:6px;line-height:1.5}"
 +".wb-chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}"
-+".wb-chip{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line,#ece6f6);background:#fff;color:var(--ink,#4a4458);cursor:pointer}"
-+".wb-chip.on{background:var(--accent,#7b5ea7);color:#fff;border-color:var(--accent,#7b5ea7)}"
-+".wb-item{border-top:1px solid var(--line,#ece6f6);padding:8px 0}.wb-item:first-child{border-top:none}"
++".wb-chip{font-size:12px;padding:4px 12px;min-height:30px;border-radius:999px;border:1px solid var(--line,#ece6f6);background:#fff;color:var(--ink,#4a4458);cursor:pointer}"
++".wb-chip.on{background:var(--accent,#7b5ea7);color:#fff;border-color:var(--accent,#7b5ea7)}.wb-chip.img{margin-left:auto}"
++".wb-item{border-top:1px solid var(--line,#ece6f6);padding:10px 0}.wb-item:first-child{border-top:none}"
 +".wb-meta{font-size:12px;color:var(--sub,#7a7391);display:flex;gap:6px;align-items:center}"
 +".wb-tag{font-size:11px;border-radius:6px;padding:0 6px;background:#f1ecfa;color:var(--accent,#7b5ea7)}"
 +".wb-tag.t1{background:#ffe3ea;color:#b3294f}.wb-tag.t2{background:#e3f6ea;color:#2e8b57}.wb-tag.t3{background:#fff3cd;color:#8a6d00}"
-+".wb-text{font-size:13px;line-height:1.55;margin:3px 0;word-break:break-word}"
-+".wb-act{display:flex;flex-wrap:wrap;gap:6px;align-items:center}"
-+".wb-act a,.wb-act button,.wb-more{font-size:12px;padding:1px 10px;border-radius:999px;border:1px solid var(--line,#ece6f6);background:#fff;color:var(--accent,#7b5ea7);cursor:pointer;text-decoration:none}"
++".wb-text{font-size:14px;line-height:1.6;margin:3px 0;word-break:break-word}"
++".wb-act{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}"
++".wb-act a,.wb-act button,.wb-more{font-size:12px;padding:4px 12px;min-height:30px;border-radius:999px;border:1px solid var(--line,#ece6f6);background:#fff;color:var(--accent,#7b5ea7);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;line-height:1.2;box-sizing:border-box}"
 +".wb-act a:hover,.wb-act button:hover,.wb-more:hover{background:#f3eefc}"
-+".wb-empty{font-size:13px;color:var(--sub,#7a7391);padding:10px 0}";
++".wb-empty{font-size:13px;color:var(--sub,#7a7391);padding:10px 0}"
+/* 縮圖：固定長寬比，載入前後版面不跳動 */
++".wb-imgs{display:grid;gap:4px;margin:6px 0 2px;max-width:100%}"
++".wb-imgs.n1{grid-template-columns:minmax(0,320px)}.wb-imgs.n2{grid-template-columns:repeat(2,minmax(0,1fr));max-width:420px}.wb-imgs.n3{grid-template-columns:repeat(3,minmax(0,1fr));max-width:480px}"
++".wb-th{position:relative;display:block;padding:0;border:1px solid var(--line,#ece6f6);border-radius:10px;overflow:hidden;background:#f3eefc;cursor:zoom-in;aspect-ratio:1/1;min-width:0}"
++".wb-imgs.n1 .wb-th{aspect-ratio:16/10}"
++".wb-th img{display:block;width:100%;height:100%;object-fit:cover}"
++".wb-th.bad{display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--sub,#7a7391)}"
++".wb-plus{position:absolute;top:0;right:0;bottom:0;left:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);color:#fff;font-weight:700;font-size:18px}"
++".wb-imgoff{font-size:12px;color:var(--sub,#7a7391);margin:4px 0}"
++"@media(max-width:640px){.wb-chip,.wb-act a,.wb-act button,.wb-more{min-height:40px;padding:6px 14px}.wb-card{margin:0 10px 14px}.wb-imgs.n1{grid-template-columns:minmax(0,1fr)}.wb-imgs.n2,.wb-imgs.n3{max-width:none}}"
+/* 放大檢視 */
++".wb-lb{position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483000;background:rgba(10,8,20,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px}"
++".wb-lb[hidden]{display:none}"
++".wb-lb-img{max-width:100%;max-height:78vh;object-fit:contain;border-radius:6px;background:#1b1830}"
++".wb-lb-msg{color:#e6e0f5;font-size:14px;text-align:center;padding:24px;line-height:1.7}.wb-lb-msg a{color:#ffd6e0}"
++".wb-lb-bar{display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap}"
++".wb-lb-x,.wb-lb-bar button,.wb-lb-bar a{min-width:44px;min-height:44px;padding:0 14px;border-radius:999px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;font-size:14px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}"
++".wb-lb-bar button:disabled{opacity:.35;cursor:default}"
++".wb-lb-cnt{color:#e6e0f5;font-size:13px;min-width:44px;text-align:center}"
++".wb-lb-x{position:absolute;top:10px;right:10px;font-size:20px!important;padding:0!important}";
 document.head.appendChild(st);
 
 /* ---------- 區塊骨架 ---------- */
@@ -760,12 +785,70 @@ var foot=document.querySelector("footer");
 if(foot&&foot.parentNode)foot.parentNode.insertBefore(card,foot);else document.body.appendChild(card);
 
 /* ---------- 工具 ---------- */
-function pad(n){return (n<10?"0":"")+n}
 function md(s){var a=s.split("-");return (+a[1])+"/"+(+a[2])}
 function when(t){var y=t.slice(0,4),cur=String(new Date().getFullYear());var d=t.slice(5,10).replace(/^0/,"").replace("-0","-").replace("-","/");return (y!==cur?y+"/":"")+d+" "+t.slice(11,16)}
 function tagCls(t){return t==="卡池"?"t1":(t==="PV"?"t2":(t==="更新維護"?"t3":""))}
 function openNew(a){a.target="_blank";a.rel="noopener noreferrer";
   a.addEventListener("click",function(e){var w=null;try{w=window.open(a.href,"_blank")}catch(x){}if(w){try{w.opener=null}catch(x){}e.preventDefault()}});return a}
+function okUrl(u){return typeof u==="string"&&/^https:\/\//i.test(u)}
+function pics(p){return (Array.isArray(p.img)?p.img:[]).filter(function(i){return i&&okUrl(i.t)&&okUrl(i.l||i.t)}).map(function(i){return {t:i.t,l:i.l||i.t}})}
+
+/* ---------- 放大檢視（點縮圖；手機可左右滑、輕點背景關閉） ---------- */
+var lb=null,lbImg,lbMsg,lbCnt,lbPrev,lbNext,lbWeibo,lbOrig,lbList=[],lbIdx=0,lbPost="",lbOpener=null,tx=null;
+function ensureLb(){
+  if(lb)return;
+  lb=mk("div","wb-lb");lb.hidden=true;lb.setAttribute("role","dialog");lb.setAttribute("aria-modal","true");lb.setAttribute("aria-label","微博圖片");
+  lbImg=document.createElement("img");lbImg.className="wb-lb-img";lbImg.alt="";lbImg.referrerPolicy="no-referrer";
+  lbMsg=mk("div","wb-lb-msg");lbMsg.hidden=true;
+  var bar=mk("div","wb-lb-bar");
+  lbPrev=mk("button",null,"‹");lbPrev.type="button";lbPrev.setAttribute("aria-label","上一張");
+  lbCnt=mk("span","wb-lb-cnt");
+  lbNext=mk("button",null,"›");lbNext.type="button";lbNext.setAttribute("aria-label","下一張");
+  lbOrig=mk("a",null,"原圖 ↗");lbWeibo=mk("a",null,"開啟微博 ↗");
+  [lbOrig,lbWeibo].forEach(function(a){openNew(a)});
+  var x=mk("button","wb-lb-x","✕");x.type="button";x.setAttribute("aria-label","關閉");
+  [lbPrev,lbCnt,lbNext,lbOrig,lbWeibo].forEach(function(e){bar.appendChild(e)});
+  lb.appendChild(x);lb.appendChild(lbImg);lb.appendChild(lbMsg);lb.appendChild(bar);document.body.appendChild(lb);
+  x.onclick=lbClose;
+  lb.addEventListener("click",function(e){if(e.target===lb)lbClose()});
+  lbPrev.onclick=function(){lbGo(-1)};lbNext.onclick=function(){lbGo(1)};
+  lb.addEventListener("touchstart",function(e){tx=e.touches&&e.touches.length===1?e.touches[0].clientX:null},{passive:true});
+  lb.addEventListener("touchend",function(e){if(tx==null)return;var dx=(e.changedTouches[0].clientX)-tx;tx=null;if(Math.abs(dx)>50)lbGo(dx<0?1:-1)},{passive:true});
+  document.addEventListener("keydown",function(e){if(lb.hidden)return;if(e.key==="Escape")lbClose();else if(e.key==="ArrowLeft")lbGo(-1);else if(e.key==="ArrowRight")lbGo(1)});
+  lbImg.onerror=function(){
+    var cur=lbList[lbIdx];
+    if(cur&&lbImg.dataset.stage==="large"&&cur.t!==cur.l){lbImg.dataset.stage="thumb";lbImg.src=cur.t;return}
+    lbImg.hidden=true;lbMsg.hidden=false;lbMsg.textContent="這張圖片無法載入（微博圖床可能擋住外部網站，或網路太慢）。";
+    if(lbPost){lbMsg.appendChild(document.createElement("br"));var a=mk("a",null,"到微博查看原貼文 ↗");a.href=lbPost;openNew(a);lbMsg.appendChild(a)}
+  };
+}
+function lbShow(){
+  var cur=lbList[lbIdx];lbMsg.hidden=true;lbMsg.textContent="";lbImg.hidden=false;
+  lbImg.dataset.stage="large";lbImg.alt="微博圖片 "+(lbIdx+1)+"／"+lbList.length;lbImg.src=cur.l;
+  lbCnt.textContent=(lbIdx+1)+"／"+lbList.length;lbPrev.disabled=lbIdx===0;lbNext.disabled=lbIdx===lbList.length-1;
+  lbOrig.href=cur.l;lbWeibo.href=lbPost||"#";lbWeibo.style.display=lbPost?"":"none";
+  lbPrev.style.visibility=lbNext.style.visibility=lbList.length>1?"visible":"hidden";lbCnt.style.display=lbList.length>1?"":"none";
+}
+function lbGo(d){var n=lbIdx+d;if(n<0||n>=lbList.length)return;lbIdx=n;lbShow()}
+function lbOpen(list,i,post,opener){ensureLb();lbList=list;lbIdx=i;lbPost=okUrl(post)?post:"";lbOpener=opener||null;lbShow();lb.hidden=false;document.body.style.overflow="hidden";lb.querySelector(".wb-lb-x").focus()}
+function lbClose(){if(!lb||lb.hidden)return;lb.hidden=true;lbImg.removeAttribute("src");document.body.style.overflow="";if(lbOpener&&lbOpener.focus)try{lbOpener.focus()}catch(e){}}
+
+/* ---------- 縮圖列 ---------- */
+function thumbs(p){
+  var list=pics(p);if(!list.length)return null;
+  if(!imgOn())return mk("div","wb-imgoff","🖼 本則有 "+list.length+" 張圖片（已關閉顯示）");
+  var box=mk("div","wb-imgs n"+Math.min(list.length,3));
+  list.slice(0,3).forEach(function(im,i){
+    var b=mk("button","wb-th");b.type="button";b.setAttribute("aria-label","放大圖片 "+(i+1)+"／"+list.length);
+    var el=document.createElement("img");el.loading="lazy";el.decoding="async";el.referrerPolicy="no-referrer";el.alt="微博圖片 "+(i+1);
+    el.onerror=function(){b.classList.add("bad");b.textContent="🖼";b.title="縮圖無法載入，點一下仍可嘗試開啟大圖"};
+    el.src=im.t;b.appendChild(el);
+    if(i===2&&list.length>3)b.appendChild(mk("span","wb-plus","+"+(list.length-3)));
+    b.onclick=function(){lbOpen(list,i,p.url,b)};
+    box.appendChild(b);
+  });
+  return box;
+}
 
 /* ---------- 跳到日曆（只用頁面上的按鈕與 DOM） ---------- */
 function jump(ds){
@@ -784,7 +867,6 @@ function draw(){
   chips.textContent="";list.textContent="";warn.hidden=true;more.hidden=true;stat.textContent="";
   var posts=(FEED&&FEED.posts)||[];
   if(!FEED){
-    stat.textContent="";
     list.appendChild(mk("div","wb-empty",location.protocol==="file:"?"以檔案方式開啟時無法讀取微博公告。":(ERR==="404"?"尚未產生微博公告資料（排程執行後會出現）。":"目前讀不到微博公告資料。")));
     return;
   }
@@ -798,14 +880,19 @@ function draw(){
     var n=t==="全部"?posts.length:posts.filter(function(p){return p.tag===t}).length;
     var b=mk("button","wb-chip"+(t===TAG?" on":""),t+"（"+n+"）");b.type="button";
     b.onclick=function(){TAG=t;N=STEP;draw()};chips.appendChild(b)});
+  if(posts.some(function(p){return pics(p).length})){
+    var tg=mk("button","wb-chip img"+(imgOn()?" on":""),"🖼 圖片："+(imgOn()?"開":"關"));tg.type="button";
+    tg.setAttribute("aria-pressed",imgOn()?"true":"false");tg.onclick=function(){setImg(!imgOn());draw()};chips.appendChild(tg);
+  }
   var rows=posts.filter(function(p){return TAG==="全部"||p.tag===TAG});
   if(!rows.length){list.appendChild(mk("div","wb-empty",posts.length?"這個分類目前沒有公告。":"目前沒有微博公告資料。"));return}
   rows.slice(0,N).forEach(function(p){
     var it=mk("div","wb-item"),meta=mk("div","wb-meta");
     meta.appendChild(document.createTextNode(when(p.time)));meta.appendChild(mk("span","wb-tag "+tagCls(p.tag),p.tag));
     it.appendChild(meta);it.appendChild(mk("div","wb-text",p.text));
+    var th=thumbs(p);if(th)it.appendChild(th);
     var act=mk("div","wb-act");
-    if(p.url&&/^https?:\/\//.test(p.url)){var a=mk("a",null,"開啟微博 ↗");a.href=p.url;act.appendChild(openNew(a))}
+    if(okUrl(p.url)){var a=mk("a",null,"開啟微博 ↗");a.href=p.url;act.appendChild(openNew(a))}
     (p.periods||[]).slice(0,2).forEach(function(r){
       if(!r.start)return;var b=mk("button",null,"📅 "+md(r.start)+(r.end?"–"+md(r.end):" 起")+" 在日曆上看");b.type="button";
       b.onclick=function(){jump(r.start)};act.appendChild(b)});
@@ -820,9 +907,10 @@ function load(){
   .then(function(j){if(!j||!Array.isArray(j.posts))throw new Error("format");FEED=j;ERR="";draw()})
   .catch(function(e){FEED=null;ERR=(e&&e.message)||"";draw()});
 }
-load();setInterval(load,REFRESH);
-var rl=document.getElementById("reload");if(rl)rl.addEventListener("click",load);   // 管理模式的「重新載入」「立即檢查」也會一併更新
+load();setInterval(function(){if(!lb||lb.hidden)load()},REFRESH);   // 放大檢視中不重繪，避免圖片被中斷
+var rl=document.getElementById("reload");if(rl)rl.addEventListener("click",load);
 })();
 </script>
+
 </body>
 </html>
