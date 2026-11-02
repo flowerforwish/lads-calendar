@@ -1,10 +1,15 @@
 name: Update PV links
 on:
   schedule:
-    - cron: "30 3 * * *"       # 每天 UTC 03:30 = 台灣 11:30
-  workflow_dispatch:           # 可在 Actions 頁面手動執行
+    # 台灣時間 11:01、11:10、12:01、12:10、18:01、18:10
+    # （GitHub 用 UTC：03:01、03:10、04:01、04:10、10:01、10:10；台灣沒有夏令時間，不需調整）
+    - cron: "1,10 3,4,10 * * *"
+  workflow_dispatch:                 # 可在 Actions 頁面或網頁管理模式的「⚡ 立即檢查新 PV」手動觸發
 permissions:
   contents: write
+concurrency:
+  group: update-pv                   # 同一時間只跑一個，避免排程與手動撞在一起
+  cancel-in-progress: false
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -13,10 +18,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Fetch YouTube and update pools.json
         run: python scripts/update_pv.py
         env:
           YT_API_KEY: ${{ secrets.YT_API_KEY }}
+
       - name: Commit if changed
         run: |
           if ! git diff --quiet pools.json; then
@@ -24,5 +31,20 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add pools.json
             git commit -m "auto: update pools.json"
-            git push
+            git push || { git pull --rebase && git push; }
           fi
+
+      - name: Weibo cross-check (唯讀；失敗不影響上面的更新)
+        continue-on-error: true
+        run: |
+          pip install opencc-python-reimplemented || true
+          python scripts/weibo_check.py
+        env:
+          WEIBO_COOKIE: ${{ secrets.WEIBO_COOKIE }}   # 沒設定就用匿名請求
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weibo-report
+          path: weibo_report.json
+          if-no-files-found: ignore
