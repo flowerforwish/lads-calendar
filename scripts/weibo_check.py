@@ -88,6 +88,52 @@ def snippet(body, n=160):
 def synth_id(pub, text):
     return "s" + hashlib.sha1(f"{pub}|{text[:60]}".encode("utf-8")).hexdigest()[:11]
 
+# ---------- 圖片（只記網址，不下載、不存檔；網頁端再載入縮圖） ----------
+SIZE_SEGS = {"large", "mw2000", "mw1024", "mw690", "mw480", "orj1080", "orj960", "orj480", "orj360", "bmiddle", "thumbnail",
+             "thumb150", "thumb180", "thumb300", "small", "woriginal", "original", "wap180", "wap360", "wap720", "middle", "square"}
+MAX_IMGS = 6
+IMG_MARK = re.compile("\x01IMG:([^\x02]+)\x02")
+IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
+ATTR = re.compile(r"([\w:-]+)\s*=\s*(?:\"([^\"]*)\"|'([^']*)')")
+BAD_IMG = re.compile(r"crop\.|//face\.|/face/|emoticon|emoji|/icon|icon[_-]|/logo|avatar|/default|h5\.sinaimg\.cn/upload|img\.t\.sinajs\.cn|/(?:orj|thumb|wap)50/|/orj30/|\.gif(?:\?|$)", re.I)
+GOOD_HOST = re.compile(r"^https?://[^/]*(?:sinaimg\.(?:cn|com)|sina\.cn|sina\.com\.cn)/", re.I)
+
+def img_pair(url):
+    """回傳 {'t': 縮圖網址, 'l': 大圖網址}；weibo 圖床（…sinaimg.cn/<尺寸>/<檔名>）可換尺寸，其他網址 t=l。"""
+    u = (url or "").strip().replace("&amp;", "&")
+    if u.startswith("//"): u = "https:" + u
+    u = re.sub(r"^http://", "https://", u)
+    m = re.match(r"^(https://[^/]*sinaimg\.(?:cn|com)/)([^/]+)/(.+)$", u, re.I)
+    if m and m.group(2).lower() in SIZE_SEGS:
+        return {"t": f"{m.group(1)}orj360/{m.group(3)}", "l": f"{m.group(1)}large/{m.group(3)}"}
+    return {"t": u, "l": u}
+
+def uniq_pairs(urls):
+    out, seen = [], set()
+    for u in urls:
+        p = img_pair(u)
+        key = re.sub(r"^https://[^/]+/[^/]+/", "", p["l"])
+        if not p["t"].startswith("https://") or key in seen: continue
+        seen.add(key); out.append(p)
+        if len(out) >= MAX_IMGS: break
+    return out
+
+def mark_images(html):
+    """把貼文圖片的 <img> 換成不可見記號（\x01IMG:網址\x02），其餘 <img>（頭像、表情、圖示）直接丟掉。"""
+    def one(m):
+        tag = m.group(0)
+        at = {k.lower(): (a or b) for k, a, b in ATTR.findall(tag)}
+        src = at.get("data-src") or at.get("data-original") or at.get("data-lazy-src") or at.get("src") or ""
+        if not src or src.startswith("data:"): return ""
+        if src.startswith("//"): src = "https:" + src
+        if not GOOD_HOST.match(src) or BAD_IMG.search(src): return ""
+        if re.search(r"avatar|face|icon|logo|emoji|head|portrait", (at.get("class", "") + " " + at.get("alt", "")), re.I): return ""
+        for k in ("width", "height"):
+            v = re.sub(r"\D", "", at.get(k, ""))
+            if v and int(v) < 100: return ""
+        return f"\x01IMG:{src}\x02"
+    return IMG_TAG.sub(one, html)
+
 class Result:
     def __init__(self, name): self.name, self.verdict, self.why, self.posts, self.hint = name, "SKIP", "", [], ""
 
@@ -123,9 +169,16 @@ def posts_from_json(j):
     for c in (j.get("data") or {}).get("cards") or []:
         m = c.get("mblog")
         if not m: continue
+        urls = []
+        for pc in (m.get("pics") or []):
+            if isinstance(pc, dict):
+                urls.append(((pc.get("large") or {}).get("url")) or pc.get("url") or (f"https://wx1.sinaimg.cn/large/{pc['pid']}.jpg" if pc.get("pid") else ""))
+        if not urls:
+            pp = ((m.get("page_info") or {}).get("page_pic") or {}).get("url")      # 影片貼文的封面
+            if pp: urls.append(pp)
         out.append(dict(id=str(m.get("id") or m.get("mid") or ""), created=parse_created(m.get("created_at", "")),
                         text=s2t(strip_html(m.get("text") or m.get("raw_text") or "")),
-                        url=f"https://m.weibo.cn/detail/{m.get('id') or m.get('mid')}"))
+                        url=f"https://m.weibo.cn/detail/{m.get('id') or m.get('mid')}", imgs=uniq_pairs([u for u in urls if u])))
     return out
 
 def fetch_api(name, base, uid, pages, cookie, warm, mock_body=None):
@@ -164,7 +217,8 @@ SINA_SPLIT = re.compile(r"(\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2})\s*来自\s*[^\s#]{
 TAIL_NUMS = re.compile(r"(?:\s+[\d.]+万?){2,}\s*$")
 
 def parse_sina_html(html):
-    text = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", html or "")
+    text = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>|<noscript[\s\S]*?</noscript>", " ", html or "")
+    text = mark_images(text)
     text = strip_html(re.sub(r"</(p|div|li|h\d)>", "\n", text))
     text = re.sub(r"[ \t\u200b]+", " ", text)
     parts = SINA_SPLIT.split(text)
@@ -172,6 +226,8 @@ def parse_sina_html(html):
     out = []
     for i in range(1, len(parts) - 1, 2):
         ts, body = parts[i], parts[i + 1]
+        imgs = uniq_pairs(IMG_MARK.findall(body))
+        body = re.sub(r"[ \t\u200b]+", " ", IMG_MARK.sub("", body))      # 先拿掉圖片記號，文字與先前版本完全相同（貼文 id 不變）
         body = re.sub(r"^\s*(?:微博网页版|恋与深空超话|[^\s]{0,8}超话)\s*", "", body)
         body = re.sub(r"^\s*(?:已编辑|置顶)\s*", "", body)
         body = re.sub(r"\s*《?云·恋与深空》?点击即玩[:：]?\s*(?:https?://\S+|O?\s*网页链接)?", " ", body)
@@ -181,7 +237,7 @@ def parse_sina_html(html):
         try: created = datetime.strptime(ts.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=TW)
         except Exception: continue
         t = s2t(body)
-        out.append(dict(id=synth_id(created.isoformat(), t), created=created, text=t, url="https://weibo.com/u/7484247626"))
+        out.append(dict(id=synth_id(created.isoformat(), t), created=created, text=t, url="https://weibo.com/u/7484247626", imgs=imgs))
     return out
 
 def fetch_sina(base, uid, cookie, mock_html=None):
@@ -196,6 +252,14 @@ def fetch_sina(base, uid, cookie, mock_html=None):
         print(f"[{r.name}] HTTP {status}，{len(body)} bytes；內容開頭：{snippet(body)!r}")
     if status in (403, 418, 429): r.verdict, r.why = "BLOCKED", f"HTTP {status}（被拒絕）"; return r
     posts = parse_sina_html(body)
+    n_img, n_pic = sum(1 for q in posts if q.get("imgs")), sum(len(q.get("imgs") or []) for q in posts)
+    r.hint = f"含圖貼文 {n_img} 則、圖片 {n_pic} 張"
+    print(f"[{r.name}] 圖片：{r.hint}")
+    if posts and n_pic == 0:
+        srcs = [(dict((k.lower(), a or b) for k, a, b in ATTR.findall(t)).get("data-src") or dict((k.lower(), a or b) for k, a, b in ATTR.findall(t)).get("src") or "")
+                for t in IMG_TAG.findall(body)]
+        print(f"[圖片診斷] 頁面共有 <img> {len(srcs)} 個，沒有符合『貼文圖片』條件的；前 6 個 src：")
+        for u in srcs[:6]: print("   ", u[:140])
     if posts: r.verdict, r.why, r.posts = "OK", f"解析出 {len(posts)} 則", posts
     else: r.verdict, r.why = "EMPTY", f"HTTP {status}，沒有解析出任何『日期 時間 來自』貼文（頁面可能由 JS 產生或格式改變）"
     print(f"[{r.name}] 判定：{r.verdict}（{r.why}）")
@@ -216,7 +280,9 @@ def to_feed_post(q):
     pers = [dict(start=s.isoformat(), end=(e.isoformat() if e else None)) for s, e in periods(q["text"], pub.date())]
     txt = re.sub(r"#[^#]{1,30}#", "", q["text"]); txt = re.sub(r"\s+", " ", txt).strip()
     if len(txt) > 140: txt = txt[:140] + "…"
-    return dict(id=q["id"], time=pub.strftime("%Y-%m-%d %H:%M"), tag=tg, text=txt, url=q.get("url", ""), periods=pers)
+    fp = dict(id=q["id"], time=pub.strftime("%Y-%m-%d %H:%M"), tag=tg, text=txt, url=q.get("url", ""), periods=pers)
+    if q.get("imgs"): fp["img"] = q["imgs"][:MAX_IMGS]
+    return fp
 
 def save_feed(path, posts, verdict, why, uid, source):
     try: old = json.load(open(path, encoding="utf-8"))
@@ -279,11 +345,11 @@ def crosscheck(pools, posts, today):
 
 ICON = {"confirmed": "✅ 一致", "date_diff": "⚠️ 日期不同", "start_only": "ℹ️ 微博只寫開始日", "no_post": "— 微博沒找到"}
 
-def summary_md(results, used, nposts, items, unmatched, newest_txt="—"):
+def summary_md(results, used, nposts, items, unmatched, newest_txt="—", img_txt=""):
     L = ["## 微博官號核對", "", "### 各來源嘗試結果", "", "| 來源 | 結果 | 說明 |", "|---|---|---|"]
     if len(results) == 1 and results[0].verdict == "OK": L.append("| （備援 1、2 未使用：主來源已成功，沒有額外請求微博） | | |")
     for r in results: L.append(f"| {r.name} | **{r.verdict}** | {r.why or '—'}{('；' + r.hint) if r.hint else ''} |")
-    L += ["", f"- 本次採用：**{used or '無（全部失敗）'}**；取得貼文 {nposts} 則；最新一則發布於 {newest_txt}",
+    L += ["", f"- 本次採用：**{used or '無（全部失敗）'}**；取得貼文 {nposts} 則；最新一則發布於 {newest_txt}；{img_txt}",
           "- ⚠️ 微博是**大陸服**公告，台服日期可能不同；本表只做交叉核對，不會自動改日曆。", ""]
     if not used:
         return "\n".join(L + ["本次沒有取得微博資料，因此沒有核對。YouTube 更新不受影響。", ""])
@@ -327,6 +393,8 @@ def main():
     why = "" if used else "; ".join(f"{r.name}:{r.verdict}" for r in results)
     newest = max((q["created"] for q in posts if q.get("created")), default=None)
     newest_txt = newest.strftime("%Y-%m-%d %H:%M") if newest else "—"
+    n_img = sum(1 for q in posts if q.get("imgs")); n_pic = sum(len(q.get("imgs") or []) for q in posts)
+    print(f"[圖片] 含圖貼文 {n_img} 則、圖片 {n_pic} 張")
     print(f"[微博] 貼文 {len(posts)} 則；最新一則 {newest_txt}；採用來源：{used or '無'}")
     items, unmatched = [], []
     if used and os.path.exists(a.pools):
@@ -336,13 +404,13 @@ def main():
         for u in unmatched: print(f"[新活動?] {u['period']} | {u['post_time']} | {u['text']}")
     wrote = save_feed(a.feed, posts, verdict, why, a.uid, used)
     print(f"[公告] {a.feed}：{'已更新' if wrote else '無變更'}")
-    md = summary_md(results, used, len(posts), items, unmatched, newest_txt)
+    md = summary_md(results, used, len(posts), items, unmatched, newest_txt, f"含圖貼文 {n_img} 則、圖片 {n_pic} 張")
     sp = os.environ.get("GITHUB_STEP_SUMMARY")
     if sp:
         with open(sp, "a", encoding="utf-8") as f: f.write(md)
     json.dump(dict(checked=datetime.now(TW).isoformat(timespec="seconds"), used=used, verdict=verdict,
                    sources=[dict(name=r.name, verdict=r.verdict, why=r.why) for r in results], posts=len(posts),
-                   items=items, unmatched=unmatched), open("weibo_report.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+                   items=items, unmatched=unmatched, with_images=n_img, images=n_pic), open("weibo_report.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(f"[結論] {verdict}（{used or '無來源可用'}）")
 
 if __name__ == "__main__":
