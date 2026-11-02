@@ -870,7 +870,7 @@ function draw(){
     list.appendChild(mk("div","wb-empty",location.protocol==="file:"?"以檔案方式開啟時無法讀取微博公告。":(ERR==="404"?"尚未產生微博公告資料（排程執行後會出現）。":"目前讀不到微博公告資料。")));
     return;
   }
-  if(FEED.updated)stat.textContent="最近一次有新內容："+FEED.updated.slice(0,16).replace("T"," ");
+stat.textContent=posts.length?"最新公告："+when(posts[0].time)+(isAdmin()&&FEED.updated?"　（資料檔更新 "+FEED.updated.slice(0,16).replace("T"," ")+"）":""):"";
   if(FEED.verdict&&FEED.verdict!=="OK"){
     warn.hidden=false;
     warn.textContent="微博目前無法自動讀取"+(posts.length?"，以下是最後一次取得的內容。":"，所以還沒有公告可顯示。")
