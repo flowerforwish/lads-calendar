@@ -1,0 +1,111 @@
+<script>
+/* ===== 微博官號公告區塊（貼在 </body> 的前一行）=====
+   讀取同資料夾的 weibo.json（由排程的 weibo_check.py 產生），在日曆下方顯示「微博公告」清單。
+   - 微博是大陸服公告，台服日期可能不同；這個區塊只供參考，不會改動日曆上的卡池資料。
+   - 讀不到 weibo.json 或微博擋掉自動讀取時，會顯示說明，其餘功能不受影響。
+   - 不依賴頁面其他程式的內部變數，只用頁面上的按鈕與 DOM，所以可以安全地加在任何版本的 index.html。 */
+(function(){
+"use strict";
+var DATA="weibo.json",REFRESH=30*60*1000,STEP=8,FEED=null,ERR="",TAG="全部",N=STEP;
+var TAGS=["全部","卡池","PV","更新維護","活動"];
+function mk(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+function isAdmin(){var a=document.getElementById("adminTools");return !!a&&!a.hidden}
+
+/* ---------- 樣式 ---------- */
+var st=document.createElement("style");
+st.textContent=
+".wb-card{margin:0 18px 18px;background:var(--card,#fff);border:1px solid var(--line,#ece6f6);border-radius:14px;padding:12px;color:var(--ink,#4a4458)}"
++".wb-head{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}.wb-head h3{margin:0;font-size:15px;color:var(--accent,#7b5ea7)}"
++".wb-stat{font-size:12px;color:var(--sub,#7a7391)}.wb-warn{font-size:12px;background:#fff3cd;color:#8a6d00;border:1px solid #ffe69c;border-radius:8px;padding:4px 8px;margin-top:8px}"
++".wb-note{font-size:12px;color:var(--sub,#7a7391);margin-top:6px;line-height:1.5}"
++".wb-chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}"
++".wb-chip{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--line,#ece6f6);background:#fff;color:var(--ink,#4a4458);cursor:pointer}"
++".wb-chip.on{background:var(--accent,#7b5ea7);color:#fff;border-color:var(--accent,#7b5ea7)}"
++".wb-item{border-top:1px solid var(--line,#ece6f6);padding:8px 0}.wb-item:first-child{border-top:none}"
++".wb-meta{font-size:12px;color:var(--sub,#7a7391);display:flex;gap:6px;align-items:center}"
++".wb-tag{font-size:11px;border-radius:6px;padding:0 6px;background:#f1ecfa;color:var(--accent,#7b5ea7)}"
++".wb-tag.t1{background:#ffe3ea;color:#b3294f}.wb-tag.t2{background:#e3f6ea;color:#2e8b57}.wb-tag.t3{background:#fff3cd;color:#8a6d00}"
++".wb-text{font-size:13px;line-height:1.55;margin:3px 0;word-break:break-word}"
++".wb-act{display:flex;flex-wrap:wrap;gap:6px;align-items:center}"
++".wb-act a,.wb-act button,.wb-more{font-size:12px;padding:1px 10px;border-radius:999px;border:1px solid var(--line,#ece6f6);background:#fff;color:var(--accent,#7b5ea7);cursor:pointer;text-decoration:none}"
++".wb-act a:hover,.wb-act button:hover,.wb-more:hover{background:#f3eefc}"
++".wb-empty{font-size:13px;color:var(--sub,#7a7391);padding:10px 0}";
+document.head.appendChild(st);
+
+/* ---------- 區塊骨架 ---------- */
+var card=mk("section","wb-card");card.id="wbCard";card.setAttribute("aria-label","微博官號公告");
+var head=mk("div","wb-head"),h=mk("h3",null,"📢 微博官號公告"),stat=mk("span","wb-stat");
+head.appendChild(h);head.appendChild(stat);card.appendChild(head);
+var warn=mk("div","wb-warn");warn.hidden=true;card.appendChild(warn);
+card.appendChild(mk("div","wb-note","來源：官方微博（大陸服）。台服日期可能不同，請以台服官方公告為準；這裡只供參考，不會改動日曆上的卡池資料。"));
+var chips=mk("div","wb-chips");card.appendChild(chips);
+var list=mk("div","wb-list");card.appendChild(list);
+var more=mk("button","wb-more","顯示更多");more.type="button";more.hidden=true;card.appendChild(more);
+var foot=document.querySelector("footer");
+if(foot&&foot.parentNode)foot.parentNode.insertBefore(card,foot);else document.body.appendChild(card);
+
+/* ---------- 工具 ---------- */
+function pad(n){return (n<10?"0":"")+n}
+function md(s){var a=s.split("-");return (+a[1])+"/"+(+a[2])}
+function when(t){var y=t.slice(0,4),cur=String(new Date().getFullYear());var d=t.slice(5,10).replace(/^0/,"").replace("-0","-").replace("-","/");return (y!==cur?y+"/":"")+d+" "+t.slice(11,16)}
+function tagCls(t){return t==="卡池"?"t1":(t==="PV"?"t2":(t==="更新維護"?"t3":""))}
+function openNew(a){a.target="_blank";a.rel="noopener noreferrer";
+  a.addEventListener("click",function(e){var w=null;try{w=window.open(a.href,"_blank")}catch(x){}if(w){try{w.opener=null}catch(x){}e.preventDefault()}});return a}
+
+/* ---------- 跳到日曆（只用頁面上的按鈕與 DOM） ---------- */
+function jump(ds){
+  var p=ds.split("-"),y=+p[0],mo=+p[1],d=+p[2];
+  var vb=document.querySelector('[data-v="month"]');if(vb)vb.click();
+  var t=document.getElementById("title"),m=t&&t.textContent.match(/(\d{4})\s*年\s*(\d{1,2})\s*月/);if(!m)return;
+  var diff=(y*12+mo-1)-(+m[1]*12+(+m[2]-1)),btn=document.getElementById(diff<0?"prev":"next");
+  for(var i=0;i<Math.abs(diff)&&btn;i++)btn.click();
+  var cells=document.querySelectorAll("#main .cell:not(.out)");
+  for(var j=0;j<cells.length;j++){var dn=cells[j].querySelector(".dn");if(dn&&dn.textContent===String(d)){cells[j].click();break}}
+  var mn=document.getElementById("main");if(mn&&mn.scrollIntoView)mn.scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+/* ---------- 繪製 ---------- */
+function draw(){
+  chips.textContent="";list.textContent="";warn.hidden=true;more.hidden=true;stat.textContent="";
+  var posts=(FEED&&FEED.posts)||[];
+  if(!FEED){
+    stat.textContent="";
+    list.appendChild(mk("div","wb-empty",location.protocol==="file:"?"以檔案方式開啟時無法讀取微博公告。":(ERR==="404"?"尚未產生微博公告資料（排程執行後會出現）。":"目前讀不到微博公告資料。")));
+    return;
+  }
+  if(FEED.updated)stat.textContent="最近一次有新內容："+FEED.updated.slice(0,16).replace("T"," ");
+  if(FEED.verdict&&FEED.verdict!=="OK"){
+    warn.hidden=false;
+    warn.textContent="微博目前無法自動讀取"+(posts.length?"，以下是最後一次取得的內容。":"，所以還沒有公告可顯示。")
+      +(isAdmin()?"（技術原因："+FEED.verdict+(FEED.why?"，"+FEED.why:"")+"）":"");
+  }
+  TAGS.forEach(function(t){
+    var n=t==="全部"?posts.length:posts.filter(function(p){return p.tag===t}).length;
+    var b=mk("button","wb-chip"+(t===TAG?" on":""),t+"（"+n+"）");b.type="button";
+    b.onclick=function(){TAG=t;N=STEP;draw()};chips.appendChild(b)});
+  var rows=posts.filter(function(p){return TAG==="全部"||p.tag===TAG});
+  if(!rows.length){list.appendChild(mk("div","wb-empty",posts.length?"這個分類目前沒有公告。":"目前沒有微博公告資料。"));return}
+  rows.slice(0,N).forEach(function(p){
+    var it=mk("div","wb-item"),meta=mk("div","wb-meta");
+    meta.appendChild(document.createTextNode(when(p.time)));meta.appendChild(mk("span","wb-tag "+tagCls(p.tag),p.tag));
+    it.appendChild(meta);it.appendChild(mk("div","wb-text",p.text));
+    var act=mk("div","wb-act");
+    if(p.url&&/^https?:\/\//.test(p.url)){var a=mk("a",null,"開啟微博 ↗");a.href=p.url;act.appendChild(openNew(a))}
+    (p.periods||[]).slice(0,2).forEach(function(r){
+      if(!r.start)return;var b=mk("button",null,"📅 "+md(r.start)+(r.end?"–"+md(r.end):" 起")+" 在日曆上看");b.type="button";
+      b.onclick=function(){jump(r.start)};act.appendChild(b)});
+    it.appendChild(act);list.appendChild(it)});
+  if(rows.length>N){more.hidden=false;more.textContent="顯示更多（還有 "+(rows.length-N)+" 則）";more.onclick=function(){N+=STEP;draw()}}
+}
+
+/* ---------- 載入 ---------- */
+function load(){
+  if(!window.fetch||location.protocol==="file:"){FEED=null;draw();return}
+  fetch(DATA+"?t="+Date.now(),{cache:"no-store"}).then(function(r){if(!r.ok)throw new Error(String(r.status));return r.json()})
+  .then(function(j){if(!j||!Array.isArray(j.posts))throw new Error("format");FEED=j;ERR="";draw()})
+  .catch(function(e){FEED=null;ERR=(e&&e.message)||"";draw()});
+}
+load();setInterval(load,REFRESH);
+var rl=document.getElementById("reload");if(rl)rl.addEventListener("click",load);   // 管理模式的「重新載入」「立即檢查」也會一併更新
+})();
+</script>
