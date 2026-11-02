@@ -24,7 +24,7 @@ jobs:
         env:
           YT_API_KEY: ${{ secrets.YT_API_KEY }}
 
-      - name: Commit if changed
+      - name: Commit pools.json if changed
         run: |
           if ! git diff --quiet pools.json; then
             git config user.name "github-actions[bot]"
@@ -34,13 +34,25 @@ jobs:
             git push || { git pull --rebase && git push; }
           fi
 
-      - name: Weibo cross-check (唯讀；失敗不影響上面的更新)
+      - name: Weibo announcements (唯讀；失敗不影響 YouTube 更新)
+        if: always()
         continue-on-error: true
         run: |
           pip install opencc-python-reimplemented || true
           python scripts/weibo_check.py
         env:
           WEIBO_COOKIE: ${{ secrets.WEIBO_COOKIE }}   # 沒設定就用匿名請求
+
+      - name: Commit weibo.json if changed
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain weibo.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add weibo.json
+            git commit -m "auto: update weibo.json"
+            git push || { git pull --rebase && git push; }
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
