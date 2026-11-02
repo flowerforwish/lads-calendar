@@ -185,7 +185,7 @@ def parse_sina_html(html):
     return out
 
 def fetch_sina(base, uid, cookie, mock_html=None):
-    r = Result("C 新浪鏡像")
+    r = Result("主來源 新浪鏡像")
     if mock_html is not None: status, final, body = 200, "mock", mock_html
     else:
         hdr = {"User-Agent": UA_D, "Accept": "text/html,*/*", "Accept-Language": "zh-CN,zh;q=0.9"}
@@ -279,10 +279,11 @@ def crosscheck(pools, posts, today):
 
 ICON = {"confirmed": "✅ 一致", "date_diff": "⚠️ 日期不同", "start_only": "ℹ️ 微博只寫開始日", "no_post": "— 微博沒找到"}
 
-def summary_md(results, used, nposts, items, unmatched):
+def summary_md(results, used, nposts, items, unmatched, newest_txt="—"):
     L = ["## 微博官號核對", "", "### 各來源嘗試結果", "", "| 來源 | 結果 | 說明 |", "|---|---|---|"]
+    if len(results) == 1 and results[0].verdict == "OK": L.append("| （備援 1、2 未使用：主來源已成功，沒有額外請求微博） | | |")
     for r in results: L.append(f"| {r.name} | **{r.verdict}** | {r.why or '—'}{('；' + r.hint) if r.hint else ''} |")
-    L += ["", f"- 本次採用：**{used or '無（全部失敗）'}**；取得貼文 {nposts} 則",
+    L += ["", f"- 本次採用：**{used or '無（全部失敗）'}**；取得貼文 {nposts} 則；最新一則發布於 {newest_txt}",
           "- ⚠️ 微博是**大陸服**公告，台服日期可能不同；本表只做交叉核對，不會自動改日曆。", ""]
     if not used:
         return "\n".join(L + ["本次沒有取得微博資料，因此沒有核對。YouTube 更新不受影響。", ""])
@@ -312,17 +313,21 @@ def main():
     mock_json = open(a.mock, encoding="utf-8").read() if a.mock else None
     mock_html = open(a.mock_html, encoding="utf-8").read() if a.mock_html else None
     results, used, posts = [], "", []
-    plan = [lambda: fetch_api("A 手機介面", wbase, a.uid, a.pages, cookie, False, mock_json),
-            lambda: fetch_api("B 暖機後介面", wbase, a.uid, a.pages, cookie, True, mock_json),
-            lambda: fetch_sina(sbase, a.uid, cookie, mock_html)]
-    if mock_json is not None and mock_html is None: plan = plan[:1]
-    if mock_html is not None and mock_json is None: plan = plan[2:]
+    # 順序：主來源（新浪鏡像）成功就不再碰微博；失敗才依序用備援 1、備援 2
+    sina = lambda: fetch_sina(sbase, a.uid, cookie, mock_html)
+    api_a = lambda: fetch_api("備援1 手機介面", wbase, a.uid, a.pages, cookie, False, mock_json)
+    api_b = lambda: fetch_api("備援2 暖機後介面", wbase, a.uid, a.pages, cookie, True, mock_json)
+    plan = [sina, api_a, api_b]
+    if mock_json is not None and mock_html is None: plan = [api_a]      # 只給 JSON 模擬資料：測試手機介面解析
+    if mock_html is not None and mock_json is None: plan = [sina]       # 只給 HTML 模擬資料：測試鏡像解析
     for f in plan:
         r = f(); results.append(r)
         if r.verdict == "OK" and r.posts: used, posts = r.name, r.posts; break
     verdict = "OK" if used else (results[0].verdict if results else "EMPTY")
     why = "" if used else "; ".join(f"{r.name}:{r.verdict}" for r in results)
-    print(f"[微博] 貼文 {len(posts)} 則；採用來源：{used or '無'}")
+    newest = max((q["created"] for q in posts if q.get("created")), default=None)
+    newest_txt = newest.strftime("%Y-%m-%d %H:%M") if newest else "—"
+    print(f"[微博] 貼文 {len(posts)} 則；最新一則 {newest_txt}；採用來源：{used or '無'}")
     items, unmatched = [], []
     if used and os.path.exists(a.pools):
         pools = json.load(open(a.pools, encoding="utf-8")).get("pools", [])
@@ -331,7 +336,7 @@ def main():
         for u in unmatched: print(f"[新活動?] {u['period']} | {u['post_time']} | {u['text']}")
     wrote = save_feed(a.feed, posts, verdict, why, a.uid, used)
     print(f"[公告] {a.feed}：{'已更新' if wrote else '無變更'}")
-    md = summary_md(results, used, len(posts), items, unmatched)
+    md = summary_md(results, used, len(posts), items, unmatched, newest_txt)
     sp = os.environ.get("GITHUB_STEP_SUMMARY")
     if sp:
         with open(sp, "a", encoding="utf-8") as f: f.write(md)
