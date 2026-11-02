@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """
-微博官號模組（唯讀核對 + 產生月曆用的公告資料）
-  1) 向官方微博（UID 7484247626）取最近貼文（匿名；可選 WEIBO_COOKIE）
-  2) 輸出 weibo.json：把「卡池／PV／更新維護／活動」類貼文整理成公告清單，月曆網頁的「微博公告」區塊讀這個檔
-  3) 把貼文裡的「活動時間」和 pools.json 比對，結果寫在 GitHub Actions 的 Job Summary（不會改日曆資料）
-注意：微博是『大陸服』公告，台服日期可能不同。被擋或失敗時不會讓排程變紅，且保留上次取得的公告。
+微博官號模組 v3（多來源備援；唯讀核對 + 產生月曆「微博公告」區塊用的 weibo.json）
+來源依序嘗試，取得第一個有貼文的就停：
+  A  m.weibo.cn 手機版介面（匿名）
+  B  先「暖機」取得 Cookie 再呼叫同一個介面（有些匿名請求被放行要先有 Cookie）
+  C  新浪新聞的官方微博鏡像頁 https://www.sina.cn/media/7484247626（HTML，解析『日期 時間 來自』格式）
+每個來源的結果（含回傳內容前 160 字）都會印在 log 與 Job Summary，方便判斷是被擋、空回應還是格式變了。
+被擋或失敗時不會讓排程變紅，且保留上次取得的公告。
 
-用法：python scripts/weibo_check.py [--pools pools.json] [--feed weibo.json] [--uid 7484247626] [--pages 2] [--mock weibo.json] [--today YYYY-MM-DD]
-環境變數：WEIBO_COOKIE（選填）、WEIBO_BASE（測試用）、GITHUB_STEP_SUMMARY（Actions 自動提供）
+用法：python scripts/weibo_check.py [--pools pools.json] [--feed weibo.json] [--uid 7484247626] [--pages 2] [--mock FILE] [--mock-html FILE] [--today YYYY-MM-DD]
+環境變數：WEIBO_COOKIE（選填）、WEIBO_BASE / SINA_BASE（測試用）、GITHUB_STEP_SUMMARY（Actions 自動提供）
 """
-import json, os, re, sys, time, argparse, urllib.request, urllib.error
+import json, os, re, sys, time, hashlib, argparse, urllib.request, urllib.error, http.cookiejar
 from datetime import datetime, timezone, timedelta, date
 
 TW = timezone(timedelta(hours=8))
-UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 "
-      "(KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+UA_M = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 "
+        "(KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1")
+UA_D = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0 Safari/537.36")
 
 # ---------- 簡 -> 繁（內建字表；若環境有 opencc 就優先用） ----------
 _PAIRS = ("后後许許愿願复復开開启啟时時间間动動线線费費钻鑽获獲领領题題为為与與长長画畫终終揽攬边邊缘緣银銀当當陨隕万萬绝絕爱愛猫貓"
@@ -26,7 +30,13 @@ _PAIRS = ("后後许許愿願复復开開启啟时時间間动動线線费費钻
           "责責贤賢败敗货貨购購贴貼资資赏賞赠贈赛賽车車轨軌轮輪软軟载載较較辑輯输輸迁遷这這远遠适適递遞邮郵释釋针針钟鐘钢鋼钥鑰钱錢铃鈴"
           "链鏈锁鎖错錯键鍵镜鏡闪閃闭閉闲閒阅閱阵陣阳陽阶階陆陸陈陳队隊随隨隐隱难難雾霧静靜页頁顶頂项項顺順须須顾顧预預频頻颜顏飞飛饭飯"
           "饮飲饰飾馆館驱驅骑騎鱼魚鸟鳥鸡雞鹤鶴黄黃齐齊齿齒龄齡恋戀范範"
-          "将將戏戲游遊对對个個们們会會发發内內么麼见見觉覺应應术術记記马馬总總务務员員厅廳县縣师師带帶帮幫帅帥干幹广廣庆慶库庫样樣极極构構标標机機权權条條杂雜检檢欢歡没沒济濟满滿渐漸温溫湿濕灭滅牵牽猎獵环環监監盖蓋着著础礎稳穩竞競粮糧紧緊约約绑綁综綜罚罰胜勝营營虽雖袭襲讨討训訓议議诗詩询詢诚誠谁誰谊誼谜謎谱譜贡貢负負贩販贯貫贵貴买買贺賀赖賴赶趕转轉辅輔辆輛辈輩辉輝迈邁违違遗遺邻鄰郑鄭酱醬里裡钉釘钮鈕铁鐵铜銅销銷锐銳锦錦镇鎮闯闖阴陰险險隶隸顿頓颁頒颗顆额額飘飄驻駐驾駕骗騙鸣鳴黑黑恶惡烦煩灾災灿燦炼煉牺犧爷爺脚腳筹籌吗嗎吨噸响響哗嘩圣聖块塊坏壞声聲够夠夺奪奋奮奖獎妇婦妈媽学學宁寧宠寵审審宫宮宽寬导導尔爾尝嘗层層属屬岛島币幣帘簾并並亚亞产產亲親仅僅从從仓倉仪儀众眾优優伤傷伦倫体體价價侠俠债債偿償兑兌兰蘭兴興兽獸册冊写寫军軍农農冲衝决決况況冻凍净淨减減几幾凤鳳击擊划劃刘劉则則刚剛删刪别別剑劍劝勸办辦励勵劳勞势勢勋勳区區医醫华華协協单單卖賣卢盧卫衛却卻厂廠历歷压壓厌厭参參变變叙敘叶葉叹嘆吓嚇吕呂听聽吴吳咏詠咙嚨唤喚喷噴嘱囑园園围圍国國图圖坚堅坛壇墙牆壮壯壳殼壶壺备備")
+          "将將戏戲游遊对對个個们們会會发發内內么麼见見觉覺应應术術记記马馬总總务務员員厅廳县縣师師带帶帮幫帅帥干幹广廣庆慶库庫样樣极極构構标標机機权權条條杂雜"
+          "检檢欢歡没沒济濟满滿渐漸温溫湿濕灭滅牵牽猎獵环環监監盖蓋着著础礎稳穩竞競粮糧紧緊约約绑綁综綜罚罰胜勝营營虽雖袭襲讨討训訓议議诗詩询詢诚誠谁誰谊誼谜謎谱譜"
+          "贡貢负負贩販贯貫贵貴买買贺賀赖賴赶趕转轉辅輔辆輛辈輩辉輝迈邁违違遗遺邻鄰郑鄭酱醬里裡钉釘钮鈕铁鐵铜銅销銷锐銳锦錦镇鎮闯闖阴陰险險隶隸顿頓颁頒颗顆额額飘飄驻駐驾駕"
+          "骗騙鸣鳴恶惡烦煩灾災灿燦炼煉牺犧爷爺脚腳筹籌吗嗎吨噸响響哗嘩圣聖块塊坏壞声聲够夠夺奪奋奮奖獎妇婦妈媽学學宁寧宠寵审審宫宮宽寬导導尔爾尝嘗层層属屬岛島币幣"
+          "帘簾并並亚亞产產亲親仅僅从從仓倉仪儀众眾优優伤傷伦倫体體价價侠俠债債偿償兑兌兰蘭兴興兽獸册冊写寫军軍农農冲衝决決况況冻凍净淨减減几幾凤鳳击擊划劃刘劉则則刚剛"
+          "删刪别別剑劍劝勸办辦励勵劳勞势勢勋勳区區医醫华華协協单單卖賣卢盧卫衛却卻厂廠历歷压壓厌厭参參变變叙敘叶葉叹嘆吓嚇吕呂听聽吴吳咏詠咙嚨唤喚喷噴嘱囑园園围圍国國图圖"
+          "坚堅坛壇墙牆壮壯壳殼壶壺备備毕畢迹跡")
 TBL = {ord(_PAIRS[i]): _PAIRS[i + 1] for i in range(0, len(_PAIRS), 2)}
 try:
     from opencc import OpenCC
@@ -48,7 +58,6 @@ DATE_RE = re.compile(r"(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日\s*(?:更新後|(?
 START_ONLY = re.compile(r"(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日\s*(?:上午|凌晨)?\s*\d{1,2}[:：]\d{2}\s*起")
 
 def periods(text, pub):
-    """pub 為 date。回傳 [(開始, 結束或 None)]；只寫開始日時，結束為 None。"""
     out, used = [], []
     for m in DATE_RE.finditer(text):
         y1, m1, d1, y2, m2, d2 = m.groups()
@@ -68,18 +77,34 @@ def periods(text, pub):
         out.append((s, None))
     return out
 
-# ---------- 抓取與判定 ----------
-def get(url, cookie=""):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": UA, "Accept": "application/json, text/plain, */*", "Accept-Language": "zh-CN,zh;q=0.9",
-        "Referer": "https://m.weibo.cn/", "X-Requested-With": "XMLHttpRequest", **({"Cookie": cookie} if cookie else {})})
+# ---------- 共用 ----------
+def strip_html(t):
+    t = re.sub(r"<br\s*/?>", "\n", t or "")
+    return re.sub(r"&nbsp;", " ", re.sub(r"<[^>]+>", "", t)).strip()
+
+def snippet(body, n=160):
+    return re.sub(r"\s+", " ", (body or "")[:n * 3]).strip()[:n]
+
+def synth_id(pub, text):
+    return "s" + hashlib.sha1(f"{pub}|{text[:60]}".encode("utf-8")).hexdigest()[:11]
+
+class Result:
+    def __init__(self, name): self.name, self.verdict, self.why, self.posts, self.hint = name, "SKIP", "", [], ""
+
+# ---------- 來源 A / B：m.weibo.cn JSON 介面 ----------
+def opener_with_jar():
+    jar = http.cookiejar.CookieJar()
+    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar)), jar
+
+def http_get(op, url, headers, timeout=30):
+    req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with op.open(req, timeout=timeout) as r:
             return r.status, r.geturl(), r.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         return e.code, url, (e.read() or b"").decode("utf-8", "replace")
 
-def classify(status, final_url, body):
+def classify_json(status, final_url, body):
     if status in (403, 418, 429, 432): return "BLOCKED", f"HTTP {status}（被拒絕）"
     if "passport.weibo" in final_url or "visitor" in final_url: return "VISITOR_REDIRECT", "被導向訪客驗證頁"
     if re.search(r"验证码|驗證碼|captcha|安全验证", body[:3000], re.I): return "CAPTCHA", "頁面要求驗證碼"
@@ -87,24 +112,94 @@ def classify(status, final_url, body):
     except Exception: return "NOT_JSON", f"HTTP {status}，回傳不是預期格式"
     cards = (j.get("data") or {}).get("cards") or []
     if j.get("ok") == 1 and cards: return "OK", f"{len(cards)} 張卡片"
-    return "EMPTY", "回傳空內容（匿名請求常見的軟性封鎖）"
-
-def strip_html(t):
-    t = re.sub(r"<br\s*/?>", "\n", t or "")
-    return re.sub(r"&nbsp;", " ", re.sub(r"<[^>]+>", "", t)).strip()
+    return "EMPTY", f"回傳空內容（ok={j.get('ok')}）"
 
 def parse_created(s):
     try: return datetime.strptime(s, "%a %b %d %H:%M:%S %z %Y").astimezone(TW)
     except Exception: return None
 
-def posts_from(j):
+def posts_from_json(j):
     out = []
     for c in (j.get("data") or {}).get("cards") or []:
         m = c.get("mblog")
         if not m: continue
         out.append(dict(id=str(m.get("id") or m.get("mid") or ""), created=parse_created(m.get("created_at", "")),
-                        created_raw=m.get("created_at", ""), text=s2t(strip_html(m.get("text") or m.get("raw_text") or ""))))
+                        text=s2t(strip_html(m.get("text") or m.get("raw_text") or "")),
+                        url=f"https://m.weibo.cn/detail/{m.get('id') or m.get('mid')}"))
     return out
+
+def fetch_api(name, base, uid, pages, cookie, warm, mock_body=None):
+    r = Result(name)
+    hdr = {"User-Agent": UA_M, "Accept": "application/json, text/plain, */*", "Accept-Language": "zh-CN,zh;q=0.9",
+           "Referer": "https://m.weibo.cn/", "X-Requested-With": "XMLHttpRequest", "MWeibo-Pwa": "1"}
+    if cookie: hdr["Cookie"] = cookie
+    op, jar = opener_with_jar()
+    if warm and mock_body is None:
+        try:
+            st, fu, b = http_get(op, base + "/", {**hdr, "Accept": "text/html"}, 20)
+            r.hint = f"暖機 HTTP {st}，取得 Cookie：{', '.join(c.name for c in jar) or '無'}"
+            print(f"[{name}] {r.hint}")
+        except Exception as ex:
+            r.hint = f"暖機失敗 {type(ex).__name__}"
+    for page in range(1, pages + 1):
+        if mock_body is not None: status, final, body = 200, "mock", mock_body
+        else:
+            qs = f"type=uid&value={uid}&containerid=107603{uid}" + (f"&page={page}" if page > 1 else "")
+            t0 = time.time()
+            try: status, final, body = http_get(op, f"{base}/api/container/getIndex?{qs}", hdr)
+            except Exception as ex:
+                r.verdict, r.why = "ERROR", f"{type(ex).__name__}: {ex}"; print(f"[{name}] {r.verdict}：{r.why}"); return r
+            print(f"[{name}] 第 {page} 頁：HTTP {status}，{time.time()-t0:.1f}s，{len(body)} bytes；內容開頭：{snippet(body)!r}")
+        v, w = classify_json(status, final, body)
+        if page == 1: r.verdict, r.why = v, w
+        if v != "OK": break
+        r.posts += posts_from_json(json.loads(body))
+        if mock_body is not None: break
+        time.sleep(2.5)
+    print(f"[{name}] 判定：{r.verdict}（{r.why}）；貼文 {len(r.posts)} 則")
+    return r
+
+# ---------- 來源 C：新浪新聞鏡像（HTML，解析『YYYY-MM-DD HH:MM 來自』） ----------
+SINA_SPLIT = re.compile(r"(\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2})\s*来自\s*[^\s#]{0,12}")
+TAIL_NUMS = re.compile(r"(?:\s+[\d.]+万?){2,}\s*$")
+
+def parse_sina_html(html):
+    text = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", html or "")
+    text = strip_html(re.sub(r"</(p|div|li|h\d)>", "\n", text))
+    text = re.sub(r"[ \t\u200b]+", " ", text)
+    parts = SINA_SPLIT.split(text)
+    # parts = [前置, 時間1, 內文1, 時間2, 內文2, ...]
+    out = []
+    for i in range(1, len(parts) - 1, 2):
+        ts, body = parts[i], parts[i + 1]
+        body = re.sub(r"^\s*(?:微博网页版|恋与深空超话|[^\s]{0,8}超话)\s*", "", body)
+        body = re.sub(r"^\s*(?:已编辑|置顶)\s*", "", body)
+        body = re.sub(r"\s*《?云·恋与深空》?点击即玩[:：]?\s*(?:https?://\S+|O?\s*网页链接)?", " ", body)
+        body = TAIL_NUMS.sub("", re.sub(r"\s*展开全文.*$", "", body, flags=re.S)).strip()
+        body = re.sub(r"\s*(?:恋与深空\s*)?$", "", body).strip()
+        if not body: continue
+        try: created = datetime.strptime(ts.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=TW)
+        except Exception: continue
+        t = s2t(body)
+        out.append(dict(id=synth_id(created.isoformat(), t), created=created, text=t, url="https://weibo.com/u/7484247626"))
+    return out
+
+def fetch_sina(base, uid, cookie, mock_html=None):
+    r = Result("C 新浪鏡像")
+    if mock_html is not None: status, final, body = 200, "mock", mock_html
+    else:
+        hdr = {"User-Agent": UA_D, "Accept": "text/html,*/*", "Accept-Language": "zh-CN,zh;q=0.9"}
+        op, _ = opener_with_jar()
+        try: status, final, body = http_get(op, f"{base}/media/{uid}", hdr)
+        except Exception as ex:
+            r.verdict, r.why = "ERROR", f"{type(ex).__name__}: {ex}"; print(f"[{r.name}] {r.verdict}：{r.why}"); return r
+        print(f"[{r.name}] HTTP {status}，{len(body)} bytes；內容開頭：{snippet(body)!r}")
+    if status in (403, 418, 429): r.verdict, r.why = "BLOCKED", f"HTTP {status}（被拒絕）"; return r
+    posts = parse_sina_html(body)
+    if posts: r.verdict, r.why, r.posts = "OK", f"解析出 {len(posts)} 則", posts
+    else: r.verdict, r.why = "EMPTY", f"HTTP {status}，沒有解析出任何『日期 時間 來自』貼文（頁面可能由 JS 產生或格式改變）"
+    print(f"[{r.name}] 判定：{r.verdict}（{r.why}）")
+    return r
 
 # ---------- 公告資料（給月曆網頁用） ----------
 def tag_of(t):
@@ -119,14 +214,11 @@ def to_feed_post(q):
     if not tg or not q["id"]: return None
     pub = q["created"] or datetime.now(TW)
     pers = [dict(start=s.isoformat(), end=(e.isoformat() if e else None)) for s, e in periods(q["text"], pub.date())]
-    txt = re.sub(r"#[^#\s]{1,30}#", "", q["text"])
-    txt = re.sub(r"\s+", " ", txt).strip()
+    txt = re.sub(r"#[^#]{1,30}#", "", q["text"]); txt = re.sub(r"\s+", " ", txt).strip()
     if len(txt) > 140: txt = txt[:140] + "…"
-    return dict(id=q["id"], time=pub.strftime("%Y-%m-%d %H:%M"), tag=tg, text=txt,
-                url=f"https://m.weibo.cn/detail/{q['id']}", periods=pers)
+    return dict(id=q["id"], time=pub.strftime("%Y-%m-%d %H:%M"), tag=tg, text=txt, url=q.get("url", ""), periods=pers)
 
-def save_feed(path, posts, verdict, why, uid):
-    """合併新舊公告；內容沒變就不寫檔（避免每次排程都產生提交）。回傳是否有寫入。"""
+def save_feed(path, posts, verdict, why, uid, source):
     try: old = json.load(open(path, encoding="utf-8"))
     except Exception: old = {}
     byid = {p["id"]: p for p in old.get("posts", []) if p.get("id")}
@@ -136,7 +228,7 @@ def save_feed(path, posts, verdict, why, uid):
             if fp: byid[fp["id"]] = fp
     cutoff = (datetime.now(TW) - timedelta(days=180)).strftime("%Y-%m-%d %H:%M")
     lst = sorted((p for p in byid.values() if p["time"] >= cutoff), key=lambda p: p["time"], reverse=True)[:150]
-    new = dict(uid=uid, verdict=verdict, why=("" if verdict == "OK" else why), posts=lst)
+    new = dict(uid=uid, verdict=verdict, why=("" if verdict == "OK" else why), source=(source if verdict == "OK" else old.get("source", "")), posts=lst)
     if {k: old.get(k) for k in new} == new: return False
     new["updated"] = datetime.now(TW).isoformat(timespec="minutes")
     json.dump(new, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
@@ -168,12 +260,8 @@ def crosscheck(pools, posts, today):
                 if gap <= 3 and (best is None or gap < best[0]): best = (gap, s, e, q)
         if best:
             gap, s, e, q = best
-            res["wb"] = f"{s.isoformat()}～{e.isoformat() if e else '（未寫結束）'}"
-            res["url"] = f"https://m.weibo.cn/detail/{q['id']}" if q["id"] else ""
-            if gap != 0: res["status"] = "date_diff"
-            elif e is None: res["status"] = "start_only"
-            elif e == pe: res["status"] = "confirmed"
-            else: res["status"] = "date_diff"
+            res["wb"] = f"{s.isoformat()}～{e.isoformat() if e else '（未寫結束）'}"; res["url"] = q.get("url", "")
+            res["status"] = "date_diff" if gap != 0 else ("start_only" if e is None else ("confirmed" if e == pe else "date_diff"))
         items.append(res)
     unmatched, seen = [], set()
     for q in posts:
@@ -186,15 +274,17 @@ def crosscheck(pools, posts, today):
             seen.add(key)
             unmatched.append(dict(period=f"{s.isoformat()}～{e.isoformat() if e else '（未寫結束）'}",
                                   post_time=q["created"].strftime("%m/%d %H:%M") if q["created"] else "",
-                                  text=q["text"][:80].replace("\n", " "), url=f"https://m.weibo.cn/detail/{q['id']}" if q["id"] else ""))
+                                  text=q["text"][:80].replace("\n", " "), url=q.get("url", "")))
     return items, unmatched
 
 ICON = {"confirmed": "✅ 一致", "date_diff": "⚠️ 日期不同", "start_only": "ℹ️ 微博只寫開始日", "no_post": "— 微博沒找到"}
 
-def summary_md(verdict, why, nposts, items, unmatched):
-    L = ["## 微博官號核對", "", f"- 抓取結果：**{verdict}**（{why}）；取得貼文 {nposts} 則",
-         "- ⚠️ 微博是**大陸服**公告，台服日期可能不同；本表只做交叉核對，不會自動改日曆。", ""]
-    if verdict != "OK":
+def summary_md(results, used, nposts, items, unmatched):
+    L = ["## 微博官號核對", "", "### 各來源嘗試結果", "", "| 來源 | 結果 | 說明 |", "|---|---|---|"]
+    for r in results: L.append(f"| {r.name} | **{r.verdict}** | {r.why or '—'}{('；' + r.hint) if r.hint else ''} |")
+    L += ["", f"- 本次採用：**{used or '無（全部失敗）'}**；取得貼文 {nposts} 則",
+          "- ⚠️ 微博是**大陸服**公告，台服日期可能不同；本表只做交叉核對，不會自動改日曆。", ""]
+    if not used:
         return "\n".join(L + ["本次沒有取得微博資料，因此沒有核對。YouTube 更新不受影響。", ""])
     L += ["### 日曆上的池 vs 微博", "", "| 池 | 日曆 | 微博 | 結果 |", "|---|---|---|---|"]
     for r in items:
@@ -212,43 +302,43 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pools", default="pools.json"); ap.add_argument("--feed", default="weibo.json")
     ap.add_argument("--uid", default="7484247626"); ap.add_argument("--pages", type=int, default=2)
-    ap.add_argument("--mock"); ap.add_argument("--today")
+    ap.add_argument("--mock"); ap.add_argument("--mock-html"); ap.add_argument("--today")
     a = ap.parse_args()
     today = date.fromisoformat(a.today) if a.today else datetime.now(TW).date()
-    base = os.environ.get("WEIBO_BASE", "https://m.weibo.cn").rstrip("/")
+    wbase = os.environ.get("WEIBO_BASE", "https://m.weibo.cn").rstrip("/")
+    sbase = os.environ.get("SINA_BASE", "https://www.sina.cn").rstrip("/")
     cookie = os.environ.get("WEIBO_COOKIE", "").strip()
-    print(f"[微博] UID {a.uid}；{'使用 Cookie' if cookie else '匿名請求'}；最多 {a.pages} 頁；日期基準 {today}")
-    posts, verdict, why = [], "EMPTY", ""
-    for page in range(1, a.pages + 1):
-        if a.mock: body, status, final = open(a.mock, encoding="utf-8").read(), 200, "mock"
-        else:
-            qs = f"type=uid&value={a.uid}&containerid=107603{a.uid}" + (f"&page={page}" if page > 1 else "")
-            t0 = time.time(); status, final, body = get(f"{base}/api/container/getIndex?{qs}", cookie)
-            print(f"[微博] 第 {page} 頁：HTTP {status}，{time.time()-t0:.1f}s，{len(body)} bytes")
-        v, w = classify(status, final, body)
-        print(f"[微博] 第 {page} 頁判定：{v}（{w}）")
-        if v != "OK":
-            if page == 1: verdict, why = v, w
-            break
-        posts += posts_from(json.loads(body)); verdict, why = "OK", w
-        if a.mock: break
-        time.sleep(2.5)
-    print(f"[微博] 取得貼文 {len(posts)} 則")
+    print(f"[微博] UID {a.uid}；{'使用 Cookie' if cookie else '匿名請求'}；日期基準 {today}")
+    mock_json = open(a.mock, encoding="utf-8").read() if a.mock else None
+    mock_html = open(a.mock_html, encoding="utf-8").read() if a.mock_html else None
+    results, used, posts = [], "", []
+    plan = [lambda: fetch_api("A 手機介面", wbase, a.uid, a.pages, cookie, False, mock_json),
+            lambda: fetch_api("B 暖機後介面", wbase, a.uid, a.pages, cookie, True, mock_json),
+            lambda: fetch_sina(sbase, a.uid, cookie, mock_html)]
+    if mock_json is not None and mock_html is None: plan = plan[:1]
+    if mock_html is not None and mock_json is None: plan = plan[2:]
+    for f in plan:
+        r = f(); results.append(r)
+        if r.verdict == "OK" and r.posts: used, posts = r.name, r.posts; break
+    verdict = "OK" if used else (results[0].verdict if results else "EMPTY")
+    why = "" if used else "; ".join(f"{r.name}:{r.verdict}" for r in results)
+    print(f"[微博] 貼文 {len(posts)} 則；採用來源：{used or '無'}")
     items, unmatched = [], []
-    if verdict == "OK" and os.path.exists(a.pools):
+    if used and os.path.exists(a.pools):
         pools = json.load(open(a.pools, encoding="utf-8")).get("pools", [])
         items, unmatched = crosscheck(pools, posts, today)
         for r in items: print(f"[核對] {('↻' if r['rerun'] else '')}{r['name']} | 日曆 {r['cal']} | 微博 {r['wb'] or '-'} | {ICON[r['status']]}")
         for u in unmatched: print(f"[新活動?] {u['period']} | {u['post_time']} | {u['text']}")
-    wrote = save_feed(a.feed, posts, verdict, why, a.uid)
+    wrote = save_feed(a.feed, posts, verdict, why, a.uid, used)
     print(f"[公告] {a.feed}：{'已更新' if wrote else '無變更'}")
-    md = summary_md(verdict, why, len(posts), items, unmatched)
+    md = summary_md(results, used, len(posts), items, unmatched)
     sp = os.environ.get("GITHUB_STEP_SUMMARY")
     if sp:
         with open(sp, "a", encoding="utf-8") as f: f.write(md)
-    json.dump(dict(checked=datetime.now(TW).isoformat(timespec="seconds"), verdict=verdict, why=why, posts=len(posts),
+    json.dump(dict(checked=datetime.now(TW).isoformat(timespec="seconds"), used=used, verdict=verdict,
+                   sources=[dict(name=r.name, verdict=r.verdict, why=r.why) for r in results], posts=len(posts),
                    items=items, unmatched=unmatched), open("weibo_report.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print(f"[結論] {verdict}")
+    print(f"[結論] {verdict}（{used or '無來源可用'}）")
 
 if __name__ == "__main__":
     try: main()
