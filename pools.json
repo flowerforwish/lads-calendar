@@ -1,5 +1,5 @@
 {
- "updated": "2026-10-29",
+ "updated": "2026-11-03",
  "pools": [
   {
    "name": "綿綿長夢",
@@ -1623,6 +1623,21 @@
     "https://www.youtube.com/watch?v=_rjrjUtd2C0",
     "https://www.youtube.com/watch?v=oESCSQwNOzg"
    ]
+  },
+  {
+   "name": "待異夢重啟",
+   "kind": "混池",
+   "rerun": false,
+   "chars": "",
+   "start": "2026-11-06",
+   "end": "2026-11-24",
+   "pv": "2026-11-03",
+   "pvTime": "11:01",
+   "pred": false,
+   "pending": true,
+   "pvSource": "youtube",
+   "pvUrl": "https://www.youtube.com/watch?v=4Z5hMbXVTng",
+   "id": "2026-11-06-yt4Z5hMbXVTng"
   },
   {
    "name": "新日卡",
