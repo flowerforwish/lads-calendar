@@ -176,7 +176,7 @@ def tail_reruns(ctx, hosts, today, horizon, all_hosts=None):
         if any(r["kind"] == "月卡" and abs((D(r["start"]) - ts).days) <= 4 for r in ctx.reruns): continue   # 已有真實復刻
         cand = todo[0]; lag = (ts - D(cand["start"])).days
         ok = lo <= lag <= hi
-        out.append(dict(card=cand, start=ts, end=te, p=p_tail * ph * (1.0 if ok else 0.4), k=k, n=n, hk=hk, lag=lag, lag_ok=ok,
+        out.append(dict(card=cand, start=ts, end=te, p=min(0.65, p_tail) * ph * (1.0 if ok else 0.4), k=k, n=n, hk=hk, lag=lag, lag_ok=ok,
                         host=lab, lag_range=(min(lags), max(lags))))
         todo = todo[1:]
     return out
@@ -374,8 +374,19 @@ def predict(pools, today, horizon=100, min_p=0.25):
     # 已知但未定日期
     have = {p["name"] for p in ctx.real}
     for k in KNOWN_UNDATED:
-        if k["name"] in have: continue
         w0, w1 = D(k["window"][0]), D(k["window"][1])
+        arrived = None
+        if k["name"] in have:
+            arrived = next(p for p in ctx.real if p["name"] == k["name"])
+        else:
+            for s_ in ctx.story:
+                if not (w0 - timedelta(days=3) <= D(s_["start"]) <= w1 + timedelta(days=3)): continue
+                if s_["chars"] == k["chars"]: arrived = s_; break
+                if s_["chars"] == "" and arrived is None: arrived = s_      # 沒抓到角色：先當作它（見下方說明）
+        if arrived is not None:
+            why = "" if arrived["chars"] == k["chars"] or arrived["name"] == k["name"] else "（該活動沒標角色，若不是這個事件，請把 pools.json 裡它的 chars 改成實際角色，預測會自動回來）"
+            skipped.append(f"{k['name']}：官方已公布『{arrived['name']}』（{arrived['start']}～{arrived['end']}），預測退場{why}")
+            continue
         if w1 <= today: continue
         mid = w0 + (w1 - w0) // 2                                   # 區間中點（固定，避免每天都變）
         if mid <= today:                                            # 中點已過、區間還沒結束：固定放在區間尾段，也不會每天變
