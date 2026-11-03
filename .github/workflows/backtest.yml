@@ -1,0 +1,17 @@
+name: Backtest predictions (手動)
+on:
+  workflow_dispatch:          # 只能手動執行；不改任何檔案、不提交
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run backtest
+        run: |
+          python scripts/backtest.py > backtest.md
+          cat backtest.md >> "$GITHUB_STEP_SUMMARY"

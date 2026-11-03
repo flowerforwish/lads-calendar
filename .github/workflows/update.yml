@@ -8,7 +8,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: update-pv                   # 同一時間只跑一個，避免排程與手動撞在一起
+  group: update-pv
   cancel-in-progress: false
 jobs:
   update:
@@ -23,6 +23,10 @@ jobs:
         run: python scripts/update_pv.py
         env:
           YT_API_KEY: ${{ secrets.YT_API_KEY }}
+
+      - name: Rule-based predictions (只改 pred 項目；失敗不影響其他步驟)
+        continue-on-error: true
+        run: python scripts/predict.py
 
       - name: Commit pools.json if changed
         run: |
@@ -41,7 +45,7 @@ jobs:
           pip install opencc-python-reimplemented || true
           python scripts/weibo_check.py
         env:
-          WEIBO_COOKIE: ${{ secrets.WEIBO_COOKIE }}   # 沒設定就用匿名請求
+          WEIBO_COOKIE: ${{ secrets.WEIBO_COOKIE }}
 
       - name: Commit weibo.json if changed
         if: always()
