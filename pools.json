@@ -1646,16 +1646,13 @@
    "chars": "秦徹",
    "start": "2026-11-17",
    "end": "2026-11-24",
-   "pv": null,
-   "pvTime": null,
-   "pred": true,
-   "conf": "中高",
-   "p": 0.62,
-   "rule": "B",
-   "predFrom": "2026-11-13",
-   "predTo": "2026-11-21",
-   "note": "預測｜把握度中高（0.62）｜附掛在「待異夢重啟」收尾：混池新池近期 4/6 檔有月卡復刻；照原池順序輪到「熾光淋漓」，原池→復刻間隔 758 天（歷史 665–770）｜非官方排期",
-   "id": "pred-2026-11-17-r-月卡"
+   "pv": "2026-11-15",
+   "pvTime": "11:00",
+   "pred": false,
+   "pending": true,
+   "pvSource": "youtube",
+   "pvUrl": "https://www.youtube.com/watch?v=snaAg-Nz-Y4",
+   "id": "2026-11-17-ytsnaAg-Nz-Y4"
   },
   {
    "name": "新月卡",
