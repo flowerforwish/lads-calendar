@@ -1667,7 +1667,11 @@
    "pending": true,
    "pvSource": "youtube",
    "pvUrl": "https://www.youtube.com/watch?v=fD1bSOFIuTU",
-   "id": "2026-11-25-ytfD1bSOFIuTU"
+   "id": "2026-11-25-ytfD1bSOFIuTU",
+   "pvUrls": [
+    "https://www.youtube.com/watch?v=fD1bSOFIuTU",
+    "https://www.youtube.com/watch?v=xq6kF9Nelrw"
+   ]
   },
   {
    "name": "新月卡",
