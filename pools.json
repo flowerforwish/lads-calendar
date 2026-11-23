@@ -1,5 +1,5 @@
 {
- "updated": "2026-11-22",
+ "updated": "2026-11-23",
  "pools": [
   {
    "name": "綿綿長夢",
@@ -1672,6 +1672,21 @@
     "https://www.youtube.com/watch?v=fD1bSOFIuTU",
     "https://www.youtube.com/watch?v=xq6kF9Nelrw"
    ]
+  },
+  {
+   "name": "遵命，飼育官",
+   "kind": "混池",
+   "rerun": true,
+   "chars": "",
+   "start": "2026-11-25",
+   "end": "2026-12-03",
+   "pv": "2026-11-23",
+   "pvTime": "11:01",
+   "pred": false,
+   "pending": true,
+   "pvSource": "youtube",
+   "pvUrl": "https://www.youtube.com/watch?v=Az4-WGZHeYo",
+   "id": "2026-11-25-ytAz4-WGZHeYo"
   },
   {
    "name": "新月卡",
